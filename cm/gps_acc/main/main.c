@@ -70,7 +70,7 @@ extern int ulp_lp_core_i2c_master_write_to_device(int, uint16_t, const uint8_t *
 extern int ulp_lp_core_i2c_master_read_from_device(int, uint16_t, uint8_t *, size_t, int32_t);
 
 int conv(uint8_t * ary, int base) {
-  return (((int)ary[base] << 26) >> 18) + ary[base+1];
+  return ((ary[base] << 24) | (ary[base+1] << 16)) >> 18;
 }
 const uint8_t FIFO_READ[] = {0x18};
 int sensor_read(int idx) {
@@ -112,36 +112,26 @@ int read_for_1sec(void) {
 int app_app_main (void)
 {
   while(1) {
-    if(read_for_1sec()) goto FAIL;
-    int vx = 0, vy = 0, vz = 0;
-    for(int i = 0; i < 12; ++i) {
-      vx += value_x[i];
-      vy += value_y[i];
-      vz += value_z[i];
-    }
-    vx = (abs(vx) + abs(vy) + abs(vz))/12;
-    if(abs(vx - GRAVITY) > THRESHOLD) goto FAIL;
-    delayMs(7*1000);
-  }
+    acc = 
  FAIL:
     return 0;
 }
 
+measure(sda){
+  int acc; //絶対値の合計
+  int x = 
+  acc = abs(x) + abs(y) + abs(z);
+}
+
 void app_main(void)
 {
-    rtc_gpio_init(1);
-    rtc_gpio_set_direction(1, RTC_GPIO_MODE_OUTPUT_ONLY);
-    rtc_gpio_pulldown_dis(1);
-    rtc_gpio_pullup_dis(1);
-    rtc_gpio_set_level(1, 1);
     // AUTO makes the RTC IO unstable.
-    esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
+    esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON); //RTC回路をON二設定
     lp_i2c_init();
     lp_core_init();
     while(1) {
-        rtc_gpio_set_level(1, 0);
         app_app_main();
-        rtc_gpio_set_level(1, 1);
         return;
     }
 }
+
