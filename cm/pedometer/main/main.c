@@ -16,35 +16,27 @@ extern const uint8_t lp_core_main_bin_start[] asm("_binary_ulp_core_main_bin_sta
 extern const uint8_t lp_core_main_bin_end[]   asm("_binary_ulp_core_main_bin_end");
 #define ADXL367_I2C_ADDR 0x1D
 #define MEASURE_MODE_ON {0x2D, 0x02}
-#define BUFFER_SIZE 4
-
 
 static void lp_core_init(void)
 {
-    ESP_ERROR_CHECK(ulp_lp_core_load_binary(lp_core_main_bin_start, (lp_core_main_bin_end - lp_core_main_bin_start))); //(ポインタ、サイズ)
+    ESP_ERROR_CHECK(ulp_lp_core_load_binary(lp_core_main_bin_start, (lp_core_main_bin_end - lp_core_main_bin_start)));
 }
 
 int conv(uint8_t * ary, int base) {
-  return ((ary[base] << 24) | (ary[base+1] << 16)) >> 18;
+    return ((ary[base] << 24) | (ary[base+1] << 16)) >> 18;
 }
 
 int sensor_read(int *x, int *y, int *z) {
     uint8_t data_rd[6];
-    
-    // 変更点1: FIFOではなく、最新データが入っている XDATA_L レジスタ(0x0E)を指定
     uint8_t reg_addr = 0x0E; 
 
-    // 変更点2: WriteとReadを一度に行う専用関数を使用する（delayは不要）
     int ret = i2c_master_write_read_device(
-        I2C_NUM_0, 
+        I2C_NUM_0,
         ADXL367_I2C_ADDR, 
-        &reg_addr, 1,             // 書き込むレジスタアドレス（1バイト）
-        data_rd, sizeof(data_rd), // 読み取ったデータを入れる配列（6バイト）
+        &reg_addr, 1,
+        data_rd, sizeof(data_rd),
         pdMS_TO_TICKS(500)
     );
-
-    printf("read result = %d d0=%02x d1=%02x d2=%02x d3=%02x d4=%02x d5=%02x\n", 
-            ret, data_rd[0], data_rd[1], data_rd[2], data_rd[3], data_rd[4], data_rd[5]);
 
     if (ret != ESP_OK) {
         return 1;
@@ -55,7 +47,6 @@ int sensor_read(int *x, int *y, int *z) {
     *z = conv(data_rd, 4);
     return 0;
 }
-
 
 static void i2c_init(void)
 {
@@ -72,193 +63,134 @@ static void i2c_init(void)
     ESP_ERROR_CHECK(i2c_driver_install(I2C_NUM_0, I2C_MODE_MASTER, 0, 0, 0));
 }
 
-static int HYSTERESIS = 500; //ヒステリシスの値
-static int SENSITIVITY = 4000; //1gモード //一歩とみなすための加速度の変化量の閾値
+// ==========================================
+// AN-2554 準拠 パラメータ設定
+// ==========================================
+// 実測データ(回転:1000~1500, 腕振り:3000~6000)に基づき、中間の1700に設定
+#define SENSITIVITY 1700   
+#define SAMPLE_RATE_MS 20    
 
-typedef struct{
-    int buffer[BUFFER_SIZE];
-    int head; 
-    int tail; 
-    int count; 
-}CircularBuffer; //4サイクルバッファ構造体
+// 時間枠の定義 (ノイズ対策で少し厳しく0.3秒からに設定)
+#define TIME_0_3_SEC 15
+#define TIME_1_0_SEC 50
 
-static CircularBuffer cb; //サイキュラーバッファのインスタンス
+int current_state = 0;
+int max_value = 0;
+int min_value = INT_MAX;
+int dynamic_threshold = 0;
+int time_counter = 0;
+int consecutive_steps = 0;
+int step_count = 0;
 
-//初期化
-void initBuffer(CircularBuffer *cb) {
-    cb->head = 0;
-    cb->tail = 0;
-    cb->count = 0;
-}
+void step_algorithm_an2554(int mag) {
+    if (dynamic_threshold == 0) dynamic_threshold = mag;
+    dynamic_threshold = (dynamic_threshold * 15 + mag) / 16; 
 
-bool enqueue(CircularBuffer *cb, int value) { //valueをバッファに追加
-    if (cb->count == BUFFER_SIZE) {
-        return false; //バッファが満杯
-    }
-    cb->buffer[cb->head] = value;
-    cb->head = (cb->head + 1) % BUFFER_SIZE;
-    cb->count++;
-    return true;
-}
+    time_counter++;
 
-bool dequeue(CircularBuffer *cb, int *value) { //バッファから値を取得
-    if (cb->count == 0) {
-        return false; //バッファが空
-    }
-    *value = cb->buffer[cb->tail];
-    cb->tail = (cb->tail + 1) % BUFFER_SIZE;
-    cb->count--;
-    return true;
-}
+    switch (current_state) {
+        case 0: // 山探し
+            if (mag > max_value) {
+                // 新しい山を検知
+                max_value = mag;
+            } 
+            else if ((max_value - mag) > (SENSITIVITY / 2) && 
+                     max_value > (dynamic_threshold + SENSITIVITY / 2)) {
+                    //検知した山から明確に下がり始めた && 山がノイズではない
+                current_state = 1;
+                min_value = mag;
+                time_counter = 0;
+            }
+            break;
 
+        case 1: // 谷探し
+            if (mag < min_value) {
+                min_value = mag;
+            } 
+            else if ((mag - min_value) > (SENSITIVITY / 2) && 
+                     min_value < (dynamic_threshold - SENSITIVITY / 2)) {
+                
+                if (time_counter >= TIME_0_3_SEC) {
+                    //間隔が短すぎる場合はノイズとみなす
+                    consecutive_steps++;
+                    
+                    if (consecutive_steps == 4) {
+                        step_count += 4;
+                        printf("連続歩行検知！計 %d 歩 (落差: %d) \n", step_count, max_value - min_value);
+                    } else if (consecutive_steps > 4) {
+                        step_count++;
+                        printf(" STEP! 計 %d 歩 (落差: %d) \n", step_count, max_value - min_value);
+                    } else {
+                        // デバッグ用に落差を表示
+                        printf("歩行候補を検知 (現在 %d 連続, 落差: %d)\n", consecutive_steps, max_value - min_value);
+                    }
+                } else {
+                    consecutive_steps = 0;
+                    // printf("ノイズ検知（早すぎる）\n");
+                }
 
-static int max_time_counter = 0;
-static int max_value = 0;
-static int min_value = INT_MAX;
-static int current_state = 0; //0:SEARCHING_MAX、1:SEARCHING_MIN、2:JUDGING_PAIR、3:COUNTING_CONSECUTIVE、4:REGULATION_MODE
-static int step_count = 0;
-enum {
-    STATE_SEARCHING_MAX_ID,
-    STATE_SEARCHING_MIN_ID,
-    STATE_JUDGING_PAIR_ID,
-    STATE_COUNTING_CONSECUTIVE_ID,
-    STATE_REGULATION_MODE_ID
-};
-
-void STATE_SEARCHING_MAX(int mag) {
-    
-    if (mag > max_value) {
-        max_value = mag;
-    } else if((max_value - mag) > HYSTERESIS) {
-        current_state = STATE_SEARCHING_MIN_ID; //谷を探しに行く
-        min_value = mag; //最小値を更新
-        max_time_counter = 0; //最大値を更新した後にカウンターをリセット
-    }
-}
-
-void STATE_SEARCHING_MIN(int mag) {
-    max_time_counter++;
-    if (mag < min_value) {
-        //谷を下っている状態
-        min_value = mag;
-    } else if((mag - min_value) > HYSTERESIS) {
-        current_state = STATE_JUDGING_PAIR_ID;
-    } else if (max_time_counter > 50) { //最大値が更新されないまま1秒以上経過したらリセット
-        max_value = 0;
-        min_value = INT_MAX;
-        current_state = STATE_SEARCHING_MAX_ID;
-    }
-}
-
-void STATE_JUDGING_PAIR(int mag) {
-    if (abs(max_value - min_value) > SENSITIVITY) {
-        step_count++;
-        printf("step_count=%d\n", step_count);
-        current_state = STATE_COUNTING_CONSECUTIVE_ID;
-    } else {
-        //リセットして最初からやり直す
-        max_value = 0;
-        current_state = STATE_SEARCHING_MAX_ID;
+                max_value = mag;
+                current_state = 0;
+            } 
+            else if (time_counter > TIME_1_0_SEC) {
+                // タイムアウト: 山を見つけた後、谷が見つからない場合はリセット
+                consecutive_steps = 0;
+                max_value = mag;
+                current_state = 0;
+                // printf("タイムアウト\n");
+            }
+            break;
     }
 }
-
-
-void STATE_REGULATION_MODE(int mag) {
-    static int cooldown_counter = 0;
-    cooldown_counter++;
-    if (cooldown_counter > 5) { //クールダウン期間が終了したらリセット
-        cooldown_counter = 0;
-        max_value = 0;
-        min_value = INT_MAX;
-        current_state = STATE_SEARCHING_MAX_ID;
-    }
-}
-
-
-
 
 const uint8_t CMD_MEASURE[] = {0x2D, 2};
 const uint8_t CMD_STANDBY[] = {0x2D, 0};
-static int sum = 0; //平均計算のための合計値
+
 int sensor_on(void) {
-  return i2c_master_write_to_device(I2C_NUM_0, ADXL367_I2C_ADDR, CMD_MEASURE, sizeof(CMD_MEASURE), portMAX_DELAY);
+    return i2c_master_write_to_device(I2C_NUM_0, ADXL367_I2C_ADDR, CMD_MEASURE, sizeof(CMD_MEASURE), portMAX_DELAY);
 }
 int sensor_off(void) {
-  return i2c_master_write_to_device(I2C_NUM_0, ADXL367_I2C_ADDR, CMD_STANDBY, sizeof(CMD_STANDBY), portMAX_DELAY);
+    return i2c_master_write_to_device(I2C_NUM_0, ADXL367_I2C_ADDR, CMD_STANDBY, sizeof(CMD_STANDBY), portMAX_DELAY);
 }
+
+// フィルタリング値を保持する静的変数
+static int filtered_mag = 0;
 
 void app_app_main(void)
 {
     int x, y, z;
     
-    // 1. センサーから値を読み取る（共通）
     if (sensor_read(&x, &y, &z) != 0) {
-        return; // 読み取り失敗時は今回のループをスキップ
+        return;
+    }
+    // 1. 生の合成加速度（ユークリッド距離）
+    int raw_mag = (int)sqrt((double)x*x + (double)y*y + (double)z*z);
+
+    // 2. 超軽量ローパスフィルタ（EMA）
+    if (filtered_mag == 0) {
+        filtered_mag = raw_mag; // 初回
+    } else {
+        // 過去の滑らかな波(3) に、最新の生データ(1) を少しだけ混ぜる
+        // これにより電気的ノイズや微小な震えを吸収します
+        filtered_mag = (filtered_mag * 3 + raw_mag) / 4;
     }
 
-    // int mag = abs(x) + abs(y) + abs(z);
-    int mag = (int)sqrt((double)x*x + (double)y*y + (double)z*z);
-    // 2. バッファリングと移動平均の計算（共通）
-    if (cb.count < BUFFER_SIZE) {
-        // バッファが満杯になるまで待つ
-        printf("buffering... %d/%d\n", cb.count, BUFFER_SIZE);
-        enqueue(&cb, mag);
-        sum += mag; // ← 【超重要】この加算がないと平均が破綻します
-        return;     // 満杯になるまではここで処理を終える
-    }
-
-    // バッファ満杯なら平均を計算
-    int old_value;
-    dequeue(&cb, &old_value);
-    int ave = (sum - old_value + mag) / BUFFER_SIZE;
-    enqueue(&cb, mag);
-    sum = sum - old_value + mag;
-
-    // 3. 状態遷移（ステートマシン）
-    // 計算された ave を使って、現在の状態に応じた関数に丸投げするだけ！
-    switch (current_state) {
-        case STATE_SEARCHING_MAX_ID:
-            STATE_SEARCHING_MAX(ave);
-            break;
-            
-        case STATE_SEARCHING_MIN_ID:
-            STATE_SEARCHING_MIN(ave);
-            break;
-            
-        case STATE_JUDGING_PAIR_ID:
-            STATE_JUDGING_PAIR(ave);
-            break;
-            
-        case STATE_REGULATION_MODE_ID:
-            STATE_REGULATION_MODE(ave); // ← クールダウン関数を呼ぶ
-            break;
-            
-        default:
-            // 予期せぬ状態になったらリセット
-            current_state = STATE_SEARCHING_MAX_ID;
-            break;
-    }
+    // 3. フィルタリング後の綺麗な波をアルゴリズムへ
+    step_algorithm_an2554(filtered_mag);
+    // printf(">Raw:%d\n>Filtered:%d\n>Threshold:%d\n", raw_mag, filtered_mag, dynamic_threshold);
 }
 
-void app_main(void)
+void app_main(void) 
 {
-    //デバッグ用
-    esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
-    printf("Pedometer starting...\n");
+    // esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
     i2c_init();
-    printf("I2C initialized.\n");
     lp_core_init();
-    printf("ULP core initialized.\n");
     sensor_on();
-    printf("Sensor turned on.\n");
-    initBuffer(&cb); //サイキュラーバッファの初期化
 
-    sum = 0; //合計値の初期化
-    printf("start loop\n");
+    printf("Pedometer algorithm started...\n");
+
     while(1) {
         app_app_main();
-        vTaskDelay(pdMS_TO_TICKS(20)); // 20ms待機
+        vTaskDelay(pdMS_TO_TICKS(20)); // 20ms待機 (50Hz)
     }
 }
-
-
