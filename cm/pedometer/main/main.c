@@ -218,7 +218,7 @@ void step_algorithm_an2554(int mag){
         case 1: //谷探し
             if(is_min){
                 //山から谷の落差だけは確認する
-                if((max_value - center_val) > (SENSITIVITY / 2)){
+                if((max_value - center_val) > (SENSITIVITY)){
                     consecutivesteps++;
                     if(consecutivesteps == 4){
                         step_count += 4;
@@ -326,8 +326,8 @@ void app_main(void)
         printf("※ 前回のデータはありません。新規作成します。\n");
     }
 
-    // 3. 新しい記録用にファイルを開く（"w"モードなのでデータは上書きリセットされます）
-    FILE* f_write = fopen("/spiffs/walk_log.csv", "w");
+    // 3. 新しい記録用にファイルを開く（"a"モードなのでデータは追記されます）
+    FILE* f_write = fopen("/spiffs/walk_log.csv", "a");
     if (f_write == NULL) {
         ESP_LOGE(TAG, "Failed to open file for writing");
         return;
