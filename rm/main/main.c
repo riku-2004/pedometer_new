@@ -22,8 +22,8 @@
 //#include "gather_sht30.c"
 //#include "gps_acc.c"
 //#include "breathingled.c"
-#include "tofsense.c"
-
+//#include "tofsense.c"
+#include "pedometer.c"
 /////
 
 extern const uint8_t bin_start[] asm("_binary_ulp_main_bin_start");
@@ -89,11 +89,11 @@ static void mrbc_ledc_initialize(mrbc_vm *vm, mrbc_value *v, int argc)
     if (val != NULL && mrbc_type(*val) == MRBC_TT_INTEGER) {
         timer_conf.freq_hz = mrbc_integer(*val);
     }
-
-    val = mrbc_hash_get_p(&v[1], &mrbc_symbol_value(mrbc_str_to_symid("sleep_alive")));
-    if (val != NULL && mrbc_type(*val) >= MRBC_TT_TRUE) {
-        channel_conf.sleep_mode = LEDC_SLEEP_MODE_KEEP_ALIVE;
-    }
+    //LED制御の部分なのでコメントアウト
+    // val = mrbc_hash_get_p(&v[1], &mrbc_symbol_value(mrbc_str_to_symid("sleep_alive")));
+    // if (val != NULL && mrbc_type(*val) >= MRBC_TT_TRUE) {
+    //     channel_conf.sleep_mode = LEDC_SLEEP_MODE_KEEP_ALIVE;
+    // }
 
     ledc_timer_config(&timer_conf);
     ledc_channel_config(&channel_conf);
@@ -145,6 +145,11 @@ void app_main(void)
 #if CONFIG_IDF_TARGET_ESP32C6
   ulp_lp_core_load_binary(bin_start,(bin_end-bin_start));
   //printf("ulp_lp_core_load_binary: %d\n", ulp_lp_core_load_binary(bin_start,(bin_end-bin_start)));
+  // LP コアを起動する
+  ulp_lp_core_cfg_t cfg = {
+      .wakeup_source = ULP_LP_CORE_WAKEUP_SOURCE_HP_CPU
+  };
+  ulp_lp_core_run(&cfg);
 #else
   ulp_riscv_load_binary(bin_start,(bin_end-bin_start));
   //printf("ulp_riscv_load_binary: %d\n", ulp_riscv_load_binary(bin_start,(bin_end-bin_start)));

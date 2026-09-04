@@ -112,67 +112,6 @@ int time_counter = 0;
 int consecutivesteps = 0;
 int step_count = 0;
 
-// void step_algorithm_an2554(int mag) {
-//     if (dynamic_threshold == 0) dynamic_threshold = mag;
-//     dynamic_threshold = (dynamic_threshold * 15 + mag) / 16; 
-
-//     time_counter++;
-
-//     switch (current_state) {
-//         case 0: // 山探し
-//             if (mag > max_value) {
-//                 // 新しい山を検知
-//                 max_value = mag;
-//             } 
-//             else if ((max_value - mag) > (SENSITIVITY / 2) && 
-//                      max_value > (dynamic_threshold + SENSITIVITY / 2)) {
-//                     //検知した山から明確に下がり始めた && 山がノイズではない
-//                 current_state = 1;
-//                 min_value = mag;
-//                 time_counter = 0;
-//             }
-//             break;
-
-//         case 1: // 谷探し
-//             if (mag < min_value) {
-//                 min_value = mag;
-//             } 
-//             else if ((mag - min_value) > (SENSITIVITY / 2) && 
-//                      min_value < (dynamic_threshold - SENSITIVITY / 2)) {
-                
-//                 if (time_counter >= TIME_0_2_SEC) {
-//                     //間隔が短すぎる場合はノイズとみなす
-//                     consecutive_steps++;
-                    
-//                     if (consecutive_steps == 4) {
-//                         step_count += 4;
-//                         printf("連続歩行検知！計 %d 歩 (落差: %d) \n", step_count, max_value - min_value);
-//                     } else if (consecutive_steps > 4) {
-//                         step_count++;
-//                         printf(" STEP! 計 %d 歩 (落差: %d) \n", step_count, max_value - min_value);
-//                     } else {
-//                         // デバッグ用に落差を表示
-//                         printf("歩行候補を検知 (現在 %d 連続, 落差: %d)\n", consecutive_steps, max_value - min_value);
-//                     }
-//                 } else {
-//                     consecutive_steps = 0;
-//                     // printf("ノイズ検知（早すぎる）\n");
-//                 }
-
-//                 max_value = mag;
-//                 current_state = 0;
-//             } 
-//             else if (time_counter > TIME_1_0_SEC) {
-//                 // タイムアウト: 山を見つけた後、谷が見つからない場合はリセット
-//                 consecutive_steps = 0;
-//                 max_value = mag;
-//                 current_state = 0;
-//                 // printf("タイムアウト\n");
-//             }
-//             break;
-//     }
-// }
-
 //タイムウィンドウ方式
 void step_algorithm_an2554(int mag){
     //データを一個ずつ前にずらす
