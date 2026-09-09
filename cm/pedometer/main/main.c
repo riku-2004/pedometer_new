@@ -50,7 +50,7 @@ int8_t  IndexAverage;
 
 // 動的しきい値用
 int32_t buffer_dynamic_threshold[THRESHOLD_ORDER];
-int32_t BufferDinamicThreshold;
+int32_t ThresholdSum;
 int32_t old_threshold;
 int32_t NewThreshold;
 int8_t IndexThreshold;
@@ -138,7 +138,7 @@ void init_algorithm() {
     NewThreshold = 0;
     flag_threshold_counter = 0;
     old_threshold = INIT_OFFSET_VALUE;
-    BufferDinamicThreshold = INIT_OFFSET_VALUE * THRESHOLD_ORDER;//INIT_OFFSET_VALUE<<2
+    ThresholdSum = INIT_OFFSET_VALUE * THRESHOLD_ORDER;//INIT_OFFSET_VALUE<<2
     for (i = 0; i < THRESHOLD_ORDER; i++) {
         buffer_dynamic_threshold[i] = INIT_OFFSET_VALUE;
     }
@@ -210,9 +210,9 @@ void step_algorithm_an2554(int x, int y, int z) {
                     // 新しいしきい値を計算
                     NewThreshold = (max_value + center_val) / 2;
                     // 動的しきい値のバッファを更新　最後の値を引き、新しい値を足す
-                    BufferDinamicThreshold = BufferDinamicThreshold - buffer_dynamic_threshold[IndexThreshold] + NewThreshold;
+                    ThresholdSum = ThresholdSum - buffer_dynamic_threshold[IndexThreshold] + NewThreshold;
                     // 平均を計算して古いしきい値を更新
-                    old_threshold = BufferDinamicThreshold / THRESHOLD_ORDER;
+                    old_threshold = ThresholdSum / THRESHOLD_ORDER;
                     // バッファに新しいしきい値を格納
                     buffer_dynamic_threshold[IndexThreshold] = NewThreshold;
                     IndexThreshold++;
@@ -250,13 +250,14 @@ void step_algorithm_an2554(int x, int y, int z) {
                 current_state = 0; //山探しに戻る
             }
             break;
-    }
-
+    } //switch文閉じる
     IndexAverage++;
     if (IndexAverage > FILTER_ORDER - 1) {
         IndexAverage = 0;
     }
 }
+
+
 
 //POWER_CTLレジスタに2を書き込むことで測定モードにする
 const uint8_t CMD_MEASURE[] = {0x2D, 2};

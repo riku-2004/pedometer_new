@@ -1,6 +1,9 @@
-WINDOW_CENTER = 7
+WINDOW_CENTER = 8
 SENSITIVITY = 1700
-TIME_1_0_SECOND = 50
+ONE_SECOND = 50
+FILTER_ORDER = 4
+THRESHOLD_ORDER = 4
+INIT_OFFSET_VALUE = 4000
 class I2C
   def initialize()
     Copro.i2cinit()
@@ -42,8 +45,11 @@ class ADXL367
 end
 
 class Pedometer
+  # center_val と step_count を外部から読み取れるようにする（SPIFFSへのログ記録用）
+  attr_reader :center_val, :step_count
   def initialize()
-    @window = Array.new(15, 0)
+    # 17個の要素を持つ配列を作成し、すべての要素を0で初期化する
+    @window = Array.new(17, 0)
     @window_filled = false
     @current_state = 0
     @time_since_mountain = 0
@@ -51,13 +57,28 @@ class Pedometer
     @consecutivesteps = 0
     @step_count = 0
     @fill_count = 0
+    @filter_mean_buffer = 0
+    @index_average = 0
+    @index_threshold = 0
+    @threshold_sum = THRESHOLD_ORDER * INIT_OFFSET_VALUE
+    @buffer_dynamic_threshold = Array.new(THRESHOLD_ORDER, INIT_OFFSET_VALUE)
+    @buffer_raw = Array.new(FILTER_ORDER, 0)
+    @oldThreshold = INIT_OFFSET_VALUE
+    @flag_threshold_counter = 0
+
   end
-  def step_algorithm_an2554(mag)
+  def step_algorithm_an2554(x,y,z)
+    mag = x.abs + y.abs + z.abs
+    #FilterMeanBuffer:バッファの合計値
+    @filter_mean_buffer = @filter_mean_buffer - @buffer_raw[@index_average] + mag; #平均から最後の値を引き、新しい値を足す
+    @filter_module_data = @filter_mean_buffer / FILTER_ORDER; #平均を計算
+    @buffer_raw[@index_average] = mag; #フィルタリングされていないバッファにモジュールを格納
     # i = @window.length - 1 のとき @window[i + 1] が範囲外になるので、0..(@window.length - 2) までの範囲でループする
     for i in 0..(@window.length - 2)
       @window[i] = @window[i + 1]
     end
-    @window[@window.length - 1] = mag
+    # 一番うしろに新しいデータを入れる
+    @window[@window.length - 1] = @filter_module_data;
     if !@window_filled
       @fill_count+=1
       if @fill_count >= @window.length
@@ -79,37 +100,58 @@ class Pedometer
         @is_min = false
       end
     end
+
     if @current_state == 1
       @time_since_mountain+=1
     end
 
     case @current_state
-    when 0
-      if @is_max
-        @max_value = @center_val
-        @current_state = 1
-        @time_since_mountain = 0
-      end
-    when 1
-      if @is_min
-        if @max_value - @center_val > SENSITIVITY
-          @consecutivesteps+=1
-          if @consecutivesteps == 4
-            @step_count+=4
-            puts("Step detected! Total steps: #{@step_count}")
-          elsif @consecutivesteps > 4
-            @step_count+=1
-            puts("Step detected! Total steps: #{@step_count}")
-          end
-        else 
-          @consecutivesteps = 0
-          puts("False step detected. Total steps: #{@step_count}")
+      when 0
+        if @is_max
+          @max_value = @center_val
+          @current_state = 1
+          @time_since_mountain = 0
         end
-        @current_state = 0
-      elsif @time_since_mountain > TIME_1_0_SECOND
-        @consecutivesteps = 0
-        @current_state = 0
+      when 1
+        if @is_min
+          @diff = @max_value - @center_val
+          if @diff > SENSITIVITY
+            @newThreshold = (@max_value + @center_val) / 2
+            @threshold_sum = @threshold_sum - @buffer_dynamic_threshold[@index_threshold] + @newThreshold
+            @oldThreshold = @threshold_sum / THRESHOLD_ORDER
+            @buffer_dynamic_threshold[@index_threshold] = @newThreshold
+            @index_threshold += 1
+            if @index_threshold > THRESHOLD_ORDER - 1
+              @index_threshold = 0
+            end
+          end
+          if @max_value > @oldThreshold + SENSITIVITY / 2 && @center_val < @oldThreshold - SENSITIVITY / 2
+            @flag_threshold_counter = 0
+            @consecutivesteps+=1
+            if @consecutivesteps == 4
+              @step_count+=4
+              puts("Step detected! Total steps: #{@step_count}")
+            elsif @consecutivesteps > 4
+              @step_count+=1
+              puts("Step detected! Total steps: #{@step_count}")
+            end
+          else 
+            @flag_threshold_counter+=1
+            if @flag_threshold_counter > 1
+              @flag_threshold_counter = 0
+              @consecutivesteps = 0
+              puts("False step detected. Total steps: #{@step_count}")
+            end
+          end
+          @current_state = 0
+        elsif @time_since_mountain > ONE_SECOND
+          @consecutivesteps = 0
+          @current_state = 0
+        end
       end
+      @index_average += 1
+    if @index_average > FILTER_ORDER - 1
+        @index_average = 0
     end
   end
 end
@@ -121,24 +163,16 @@ pedometer = Pedometer.new()
 
 # センサーを計測モードにする（0x2D レジスタに 0x02 を書く）
 i2c.write(0x1D, [0x2D, 0x02])
-
-# フィルタリング用バッファ
-BUFFER_SIZE = 4
-circ_buffer = Array.new(BUFFER_SIZE, 0)
-buf_index = 0
-
+spiffs = Spiffs.new
+spiffs.init
+time_ms = 0
 # メインループ
 while true
   result = adxl.read()
-  raw_mag = Math.sqrt(result.x * result.x + result.y * result.y + result.z * result.z).to_i
-  circ_buffer[buf_index] = raw_mag
-  buf_index = (buf_index + 1) % BUFFER_SIZE
-  sum = 0
-  for i in 0..(BUFFER_SIZE - 1)
-    sum += circ_buffer[i]
-  end
-  filtered_mag = sum / BUFFER_SIZE
-  pedometer.step_algorithm_an2554(filtered_mag)
+  pedometer.step_algorithm_an2554(result.x, result.y, result.z)
+  # spiffsの中身はmain.cで定義
+  spiffs.write("#{time_ms},#{pedometer.center_val},#{pedometer.step_count}")
+  time_ms += 20
   Copro.delayMs(20)
 end
 

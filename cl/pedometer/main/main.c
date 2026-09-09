@@ -256,6 +256,7 @@ void app_app_main(void)
     int x, y, z;
     // LPコアからのデータを読み取る
     for(int i = 0; i < 500; i++) {
+        //x[0],y[0],z[0],x[1],y[1],z[1],...の順で格納されているので、3つずつ取り出す
         x = shared_buf[i * 3 + 0];
         y = shared_buf[i * 3 + 1];
         z = shared_buf[i * 3 + 2];
