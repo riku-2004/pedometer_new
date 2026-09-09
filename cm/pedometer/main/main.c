@@ -10,18 +10,28 @@
 #include "esp_spiffs.h"
 #include "esp_log.h"
 
+// LPコアのバイナリ（ビルド時に自動生成）
 extern const uint8_t lp_core_main_bin_start[] asm("_binary_ulp_core_main_bin_start");
 extern const uint8_t lp_core_main_bin_end[]   asm("_binary_ulp_core_main_bin_end");
+
+// ADXL367のI2Cアドレス（SDO=GNDのとき0x1D、SDO=VDDのとき0x53）
 #define ADXL367_I2C_ADDR 0x1D
+// 歩行判定の感度（山と谷の落差の最小許容値）
 // 実測データ(回転:1000~1500, 腕振り:3000~6000)に基づき、中間の1700に設定
+// マンハッタン距離はユークリッド距離より最大√3倍大きくなるためADI元値(400)より大きい
 #define SENSITIVITY 1700
 
+// 時間窓の中心インデックス（WINDOW_SIZE=17のとき中心は8番目）
 #define WINDOW_CENTER 8
 
 #define _1_SECOND 50 // 20Hzなので1秒は50サンプル
+// 移動平均フィルタの次数（直近4サンプルの平均を取る）
 #define FILTER_ORDER 4
+// 動的しきい値バッファのサイズ（直近4回の山谷中間値の平均でしきい値を更新）
 #define THRESHOLD_ORDER 4
+// 動的しきい値の初期値（約1g相当、歩行していない静止状態を想定）
 #define INIT_OFFSET_VALUE 4000
+// 時間窓のサイズ（FILTER_ORDER=4のとき (4<<2)+1 = 17サンプル = 340ms分）
 #define WINDOW_SIZE ((FILTER_ORDER << 2) + 1) //=17
 
 static int window[WINDOW_SIZE] = {0};
@@ -162,6 +172,7 @@ void step_algorithm_an2554(int x, int y, int z) {
             window_filled = true;
             return;
         }
+        
     }
     // ウィンドウが埋まったら中心の値を取得
     center_val = window[WINDOW_CENTER];
@@ -210,7 +221,7 @@ void step_algorithm_an2554(int x, int y, int z) {
                 }
                 //山から谷の落差だけは確認する
                 if ((max_value > (old_threshold + (SENSITIVITY >> 1))) && (center_val < (old_threshold - (SENSITIVITY >> 1)))){
-                    //フラグを立てる
+                    // しきい値条件を満たしたのでカウンタをリセット
                     flag_threshold_counter = 0;
                     consecutivesteps++;
                     if(consecutivesteps == 4){
@@ -247,7 +258,7 @@ void step_algorithm_an2554(int x, int y, int z) {
     }
 }
 
-
+//POWER_CTLレジスタに2を書き込むことで測定モードにする
 const uint8_t CMD_MEASURE[] = {0x2D, 2};
 
 int sensor_on(void) {
@@ -263,7 +274,7 @@ void app_app_main(void)
         ESP_LOGW(TAG, "Failed to read sensor data");
         return;
     }
-    //フィルタリング後の綺麗な波をアルゴリズムへ
+    //生の加速度をアルゴリズムへ渡す
     step_algorithm_an2554(x, y, z);
     printf(">Step:%d\n", step_count);
 }

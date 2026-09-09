@@ -57,28 +57,6 @@ int conv(uint8_t * ary, int base) {
     return ((ary[base] << 24) | (ary[base+1] << 16)) >> 18;
 }
 
-int sensor_read(int *x, int *y, int *z) {
-    uint8_t data_rd[6];
-    uint8_t reg_addr = 0x0E; 
-
-    int ret = i2c_master_write_read_device(
-        I2C_NUM_0,
-        ADXL367_I2C_ADDR, 
-        &reg_addr, 1,
-        data_rd, sizeof(data_rd),
-        pdMS_TO_TICKS(500)
-    );
-
-    if (ret != ESP_OK) {
-        return 1;
-    }
-
-    *x = conv(data_rd, 0);
-    *y = conv(data_rd, 2);
-    *z = conv(data_rd, 4);
-    return 0;
-}
-
 static void i2c_init(void)
 {
     i2c_config_t conf = {
@@ -114,14 +92,26 @@ static void lp_i2c_init(void)
 // 実測データ(回転:1000~1500, 腕振り:3000~6000)に基づき、中間の1700に設定
 #define SENSITIVITY 1700
 
-// 時間枠の定義 (ノイズ対策で少し厳しく0.2秒からに設定) 50Hzのため、0.2秒は10サンプル、1.0秒は50サンプル
-#define TIME_0_2_SEC 10
-#define TIME_1_0_SEC 50
+//タイムウィンドウ方式(20ms周期で50Hz)のため、17サンプル分のウィンドウを使用 20ms * 17 = 340ms = 0.34秒
+#define WINDOW_SIZE 17
+#define WINDOW_CENTER 8
 
-//タイムウィンドウ方式(20ms周期で50Hz)のため、15サンプル分のウィンドウを使用 20ms * 15 = 300ms = 0.3秒
-#define WINDOW_SIZE 15
-#define WINDOW_CENTER 7
+#define _1_SECOND 50 // 50サンプル = 1秒
 
+#define FILTER_ORDER 4 // 移動平均のサンプル数
+#define THRESHOLD_ORDER 4 // 動的しきい値のサンプル数
+#define INIT_OFFSET_VALUE 4000 // 初期しきい値のオフセット値
+
+//DeepSleepから復帰後も変数を保持するためにRTC_DATA_ATTRを使用
+RTC_DATA_ATTR static int32_t buffer_RawData[FILTER_ORDER];
+RTC_DATA_ATTR static int32_t FilterMeanBuffer;
+RTC_DATA_ATTR static int32_t buffer_dynamic_threshold[THRESHOLD_ORDER];
+RTC_DATA_ATTR static int32_t BufferDinamicThreshold;
+RTC_DATA_ATTR static int32_t old_threshold;
+RTC_DATA_ATTR static int32_t NewThreshold;
+RTC_DATA_ATTR static int8_t IndexThreshold;
+RTC_DATA_ATTR static int8_t flag_threshold_counter;
+RTC_DATA_ATTR static int IndexAverage = 0;
 RTC_DATA_ATTR static int window[WINDOW_SIZE] = {0};
 RTC_DATA_ATTR static bool window_filled = false;
 RTC_DATA_ATTR static int center_val = 0;
@@ -131,20 +121,46 @@ RTC_DATA_ATTR int max_value = 0;
 RTC_DATA_ATTR int consecutivesteps = 0;
 RTC_DATA_ATTR int step_count = 0;
 RTC_DATA_ATTR int time_ms = 0; // 経過時間を保持する変数
-//ulp用変数
+
+void init_algorithm() {
+    int8_t i;
+    step_count = 0;
+    IndexAverage = 0;
+    IndexThreshold = 0;
+    FilterMeanBuffer = 0;
+    NewThreshold = 0;
+    flag_threshold_counter = 0;
+    old_threshold = INIT_OFFSET_VALUE;
+    BufferDinamicThreshold = INIT_OFFSET_VALUE * THRESHOLD_ORDER;//INIT_OFFSET_VALUE<<2
+    for (i = 0; i < THRESHOLD_ORDER; i++) {
+        buffer_dynamic_threshold[i] = INIT_OFFSET_VALUE;
+    }
+    for (i = 0; i < FILTER_ORDER; i++) {
+        buffer_RawData[i] = 0;
+    }
+}
 
 //タイムウィンドウ方式
-void step_algorithm_an2554(int mag){
+void step_algorithm_an2554(int x, int y, int z) {
+    uint32_t ModuleData = abs(x) + abs(y) + abs(z); // 簡易的に絶対値の合計を使用
+
+    //移動平均
+    //FilterMeanBuffer:バッファの合計値
+    FilterMeanBuffer = FilterMeanBuffer - buffer_RawData[IndexAverage] + ModuleData; //平均から最後の値を引き、新しい値を足す
+    uint32_t FilterModuleData = FilterMeanBuffer / FILTER_ORDER; // 平均を計算
+    buffer_RawData[IndexAverage] = ModuleData; // フィルタリングされていないバッファにモジュールを格納
+
+    //タイムウィンドウ方式
     //データを一個ずつ前にずらす
     for(int i = 0; i < WINDOW_SIZE - 1; i++) {
         window[i] = window[i + 1];
     }
     //一番うしろに新しいデータを入れる
-    window[WINDOW_SIZE - 1] = mag;
+    window[WINDOW_SIZE - 1] = FilterModuleData;
 
     if(!window_filled){
         // ウィンドウがまだ埋まっていない場合は、埋まるまで待つ
-        static int fill_count = 0;
+        RTC_DATA_ATTR static int fill_count = 0;
         fill_count++;
         if(fill_count >= WINDOW_SIZE){
             window_filled = true;
@@ -177,8 +193,24 @@ void step_algorithm_an2554(int mag){
             break;
         case 1: //谷探し
             if(is_min){
+                //center_val=谷の値になっている
+                uint32_t Difference = max_value - center_val;
                 //山から谷の落差だけは確認する
-                if((max_value - center_val) > (SENSITIVITY)){
+                if(Difference > SENSITIVITY){
+                    // 新しいしきい値を計算
+                    NewThreshold = (max_value + center_val) / 2;
+                    // 動的しきい値のバッファを更新　最後の値を引き、新しい値を足す
+                    BufferDinamicThreshold = BufferDinamicThreshold - buffer_dynamic_threshold[IndexThreshold] + NewThreshold;
+                    // 平均を計算して古いしきい値を更新
+                    old_threshold = BufferDinamicThreshold / THRESHOLD_ORDER;
+                    // バッファに新しいしきい値を格納
+                    buffer_dynamic_threshold[IndexThreshold] = NewThreshold;
+                    IndexThreshold++;
+                    // インデックスが範囲を超えた場合は0に戻す
+                    if (IndexThreshold > THRESHOLD_ORDER - 1) IndexThreshold = 0;
+                }
+                if(max_value > (old_threshold + (SENSITIVITY >> 1)) && center_val < (old_threshold - (SENSITIVITY >> 1))){
+                    flag_threshold_counter = 0;
                     consecutivesteps++;
                     if(consecutivesteps == 4){
                         step_count += 4;
@@ -188,41 +220,35 @@ void step_algorithm_an2554(int mag){
                         printf(" STEP! 計 %d 歩 (落差: %d) \n", step_count, max_value - center_val);
                     }
                 } else {
+                    flag_threshold_counter++;
+                    if(flag_threshold_counter > 1){
+                        flag_threshold_counter = 0;
                         consecutivesteps = 0;
                         // デバッグ用に落差を表示
                         printf("歩行候補を検知 (現在 %d 連続, 落差: %d)\n", consecutivesteps, max_value - center_val);
+                    }
                 }
 
                 current_state = 0; //山探しに戻る
             }
-            else if(time_since_mountain > TIME_1_0_SEC){
+            else if(time_since_mountain > _1_SECOND){
                 //タイムアウト: 山を見つけた後、谷が見つからない場合はリセット
                 consecutivesteps = 0;
                 current_state = 0; //山探しに戻る
             }
             break;
     }
+    IndexAverage++;
+    if(IndexAverage >  FILTER_ORDER - 1) IndexAverage = 0;
 }
 
-
+//測定モードは2、スタンバイモードは0
 const uint8_t CMD_MEASURE[] = {0x2D, 2};
 const uint8_t CMD_STANDBY[] = {0x2D, 0};
 
 int sensor_on(void) {
     return i2c_master_write_to_device(I2C_NUM_0, ADXL367_I2C_ADDR, CMD_MEASURE, sizeof(CMD_MEASURE), portMAX_DELAY);
 }
-// int sensor_off(void) {
-//     return i2c_master_write_to_device(I2C_NUM_0, ADXL367_I2C_ADDR, CMD_STANDBY, sizeof(CMD_STANDBY), portMAX_DELAY);
-// }
-
-// フィルタリング値を保持する静的変数
-RTC_DATA_ATTR static int filtered_mag = 0;
-
-#define BUFFER_SIZE 4
-RTC_DATA_ATTR static int circ_buffer[BUFFER_SIZE]={0};
-RTC_DATA_ATTR static int buffer_index = 0;
-RTC_DATA_ATTR static bool is_first_sample = true;
-
 
 void app_app_main(void)
 {
@@ -233,34 +259,9 @@ void app_app_main(void)
         x = shared_buf[i * 3 + 0];
         y = shared_buf[i * 3 + 1];
         z = shared_buf[i * 3 + 2];
-        int raw_mag = (int)sqrt((double)x*x + (double)y*y + (double)z*z);
-        if (is_first_sample) {
-            //初回のサンプルでは、バッファをすべて同じ値で初期化
-            for (int i = 0; i < BUFFER_SIZE; i++) {
-                circ_buffer[i] = raw_mag;
-            }
-            is_first_sample = false;
-        } else {
-            circ_buffer[buffer_index] = raw_mag;
-            buffer_index = (buffer_index + 1) % BUFFER_SIZE;
-        }
-
-        int sum = 0;
-        for (int i = 0; i < BUFFER_SIZE; i++) {
-            sum += circ_buffer[i];
-        }
-        filtered_mag = sum / BUFFER_SIZE;
-        step_algorithm_an2554(filtered_mag);
+        step_algorithm_an2554(x, y, z);
     }
 
-    //デバッグ用
-    printf(">Filtered:%d\n", filtered_mag);
-    
-
-    // printf("/*%d,%d*/\n", raw_mag, filtered_mag);
-    // printf(">Raw:%d\n>Filtered:%d\n>Threshold:%d\n", raw_mag, filtered_mag, dynamic_threshold);
-    // CSVに1行書き込む (書式: "時間, 加速度, 歩数")
-    // ※ `center_val` はタイム・ウィンドウの中心データ
     printf(">Step:%d\n", step_count);
 }
 
@@ -298,6 +299,7 @@ void app_main(void)
         sensor_on();
         lp_i2c_init();
         //初回は初期化してすぐに寝る
+        init_algorithm();
         lp_core_init();
         esp_sleep_enable_timer_wakeup(10000000); // 10秒ごとに起床
         esp_deep_sleep_start();
@@ -312,7 +314,7 @@ void app_main(void)
         }
         app_app_main();
         time_ms += 10 * 1000; // 10秒加算
-        fprintf(f_write, "%d,%d,%d\n", time_ms, filtered_mag, step_count);
+        fprintf(f_write, "%d,%d,%d\n", time_ms, center_val, step_count);
         fflush(f_write); // ここで一度確実に保存
         fclose(f_write);
         esp_sleep_enable_timer_wakeup(10000000); // 10秒ごとに起床
