@@ -14,19 +14,31 @@
 #include "ulp_lp_core_lp_timer_shared.h"
 
 #define ADXL367_I2C_ADDR 0x1D
+const uint8_t CMD_MEASURE[] = {0x2D,2};
+const uint8_t CMD_STANDBY[] = {0x2D,0};
 int shared_buffer[1500]; // 30秒 × 50Hz
 int write_index;     // LPコアが書き込む位置
+
 int conv(uint8_t * ary, int base) {
-    return ((ary[base] << 24) | (ary[base+1] << 16)) >> 18;
+  return ((ary[base] << 24) | (ary[base+1] << 16)) >> 18;
 }
+
+int sensor_on(void) {
+  lp_core_i2c_master_write_to_device(LP_I2C_NUM_0, ADXL367_I2C_ADDR, CMD_MEASURE, sizeof(CMD_MEASURE), -1);
+}
+
+//常時計測し続ける
+// int sensor_off(void) {
+//   lp_core_i2c_master_write_to_device(LP_I2C_NUM_0, ADXL367_I2C_ADDR, CMD_STANDBY, sizeof(CMD_STANDBY), -1);
+// }
+
 int main (void)
 {
     uint8_t reg_addr = 0x0E; // データレジスタのアドレス
     uint8_t data_rd[6]; // 6バイトのデータを格納
+    //測定モード開始
+    sensor_on();
     while(1){
-        //センサーをI2Cで読み取る
-        //合成加速度を計算してRTCばっふぁに書く
-        //20ms待機する
         lp_core_i2c_master_write_to_device(0, ADXL367_I2C_ADDR, &reg_addr, sizeof(reg_addr), 100000);
         lp_core_i2c_master_read_from_device(0, ADXL367_I2C_ADDR, data_rd, sizeof(data_rd), 100000);
         int x = conv(data_rd, 0);

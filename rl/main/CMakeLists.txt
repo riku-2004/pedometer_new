@@ -1,6 +1,6 @@
 idf_component_register(SRCS "main.c"
                     INCLUDE_DIRS "."
-                    REQUIRES ulp driver mruby)
+                    REQUIRES ulp driver mruby spiffs)
 include(mrubycopro-runtime/CMakeLists.txt)
 set(ulp_exp_dep_srcs "main.c")
 set(ulp_app_name ulp_${COMPONENT_NAME})

@@ -2,16 +2,11 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include "esp_sleep.h"
-#include "driver/rtc_io.h"
-#include "soc/rtc.h"
 #include <stdbool.h>
 #include <ulp_lp_core.h>
-#include <math.h>
-#include <string.h>
 #include "limits.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "driver/i2c.h"
 #include "esp_spiffs.h"
 #include "esp_log.h"
 #include "ulp_core_main.h"
@@ -19,8 +14,6 @@
 
 extern const uint8_t lp_core_main_bin_start[] asm("_binary_ulp_core_main_bin_start");
 extern const uint8_t lp_core_main_bin_end[]   asm("_binary_ulp_core_main_bin_end");
-#define ADXL367_I2C_ADDR 0x1D
-// #define MEASURE_MODE_ON {0x2D, 0x02}
 
 static const char *TAG = "STEP_LOGGER";
 
@@ -51,24 +44,6 @@ static void lp_core_init(void)
 {
     ESP_ERROR_CHECK(ulp_lp_core_load_binary(lp_core_main_bin_start, (lp_core_main_bin_end - lp_core_main_bin_start)));
     ESP_ERROR_CHECK(ulp_lp_core_run(&cfg));
-}
-
-int conv(uint8_t * ary, int base) {
-    return ((ary[base] << 24) | (ary[base+1] << 16)) >> 18;
-}
-
-static void i2c_init(void)
-{
-    i2c_config_t conf = {
-        .mode = I2C_MODE_MASTER,
-        .sda_io_num = GPIO_NUM_6,
-        .scl_io_num = GPIO_NUM_7,
-        .sda_pullup_en = false,
-        .scl_pullup_en = false,
-        .master.clk_speed = 100000,
-    };
-    ESP_ERROR_CHECK(i2c_param_config(I2C_NUM_0, &conf));
-    ESP_ERROR_CHECK(i2c_driver_install(I2C_NUM_0, I2C_MODE_MASTER, 0, 0, 0));
 }
 
 static void lp_i2c_init(void)
@@ -241,15 +216,7 @@ void step_algorithm_an2554(int x, int y, int z) {
     IndexAverage++;
     if(IndexAverage >  FILTER_ORDER - 1) IndexAverage = 0;
 }
-
-//測定モードは2、スタンバイモードは0
-const uint8_t CMD_MEASURE[] = {0x2D, 2};
-const uint8_t CMD_STANDBY[] = {0x2D, 0};
-
-int sensor_on(void) {
-    return i2c_master_write_to_device(I2C_NUM_0, ADXL367_I2C_ADDR, CMD_MEASURE, sizeof(CMD_MEASURE), portMAX_DELAY);
-}
-
+    
 void app_app_main(void)
 {
     int *shared_buf = (int*)&ulp_shared_buffer;   
@@ -296,8 +263,6 @@ void app_main(void)
         fprintf(f_write, "Time_ms,Filtered_Mag,Step_Count\n");
         fflush(f_write); // ここで一度確実に保存
         fclose(f_write);
-        i2c_init();
-        sensor_on();
         lp_i2c_init();
         //初回は初期化してすぐに寝る
         init_algorithm();
