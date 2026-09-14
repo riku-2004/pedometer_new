@@ -24,10 +24,15 @@ end
 
 class ADXL367
   DEV_ADDR = 0x1D
-  REG_DATA = 0x0E
+  CMD_MEASURE = [0x2D,2]
+  CMD_DATA = [0x0E]
 
   def initialize(i2c)
     @i2c = i2c
+  end
+
+  def on()
+    @i2c.write(DEV_ADDR, CMD_MEASURE)
   end
 
   def conv(ary, base)
@@ -35,12 +40,13 @@ class ADXL367
   end
 
   def read()
-    @i2c.write(DEV_ADDR, [REG_DATA])
-    data = @i2c.read(DEV_ADDR, 6)
-    x = conv(data, 0)
-    y = conv(data, 2)
-    z = conv(data, 4)
-    ADXLResult.new(x, y, z)
+    @i2c.write(DEV_ADDR, CMD_DATA)
+    Copro.delayMs(5)
+    val = @i2c.read(DEV_ADDR, 6)
+    if val.size == 0 then
+      return nil
+    end
+    ADXLResult.new(conv(val, 0), conv(val, 2), conv(val, 4))
   end
 end
 
@@ -67,12 +73,12 @@ class Pedometer
     @flag_threshold_counter = 0
 
   end
-  def step_algorithm_an2554(x,y,z)
+  def step(x,y,z)
     mag = x.abs + y.abs + z.abs
     #FilterMeanBuffer:バッファの合計値
-    @filter_mean_buffer = @filter_mean_buffer - @buffer_raw[@index_average] + mag; #平均から最後の値を引き、新しい値を足す
-    @filter_module_data = @filter_mean_buffer / FILTER_ORDER; #平均を計算
-    @buffer_raw[@index_average] = mag; #フィルタリングされていないバッファにモジュールを格納
+    @filter_mean_buffer = @filter_mean_buffer - @buffer_raw[@index_average] + mag #平均から最後の値を引き、新しい値を足す
+    @filter_module_data = @filter_mean_buffer / FILTER_ORDER #平均を計算
+    @buffer_raw[@index_average] = mag #フィルタリングされていないバッファにモジュールを格納
     # i = @window.length - 1 のとき @window[i + 1] が範囲外になるので、0..(@window.length - 2) までの範囲でループする
     for i in 0..(@window.length - 2)
       @window[i] = @window[i + 1]
@@ -87,17 +93,17 @@ class Pedometer
       end
     end
     @center_val = @window[WINDOW_CENTER]
-    @is_max = true
-    @is_min = true
+    is_max = true
+    is_min = true
     for i in 0..(@window.length - 1)
       if i == WINDOW_CENTER
         next
       end
       if @window[i] >= @center_val 
-        @is_max = false
+        is_max = false
       end
       if @window[i] <= @center_val
-        @is_min = false
+        is_min = false
       end
     end
 
@@ -107,13 +113,13 @@ class Pedometer
 
     case @current_state
       when 0
-        if @is_max
+        if is_max
           @max_value = @center_val
           @current_state = 1
           @time_since_mountain = 0
         end
       when 1
-        if @is_min
+        if is_min
           @diff = @max_value - @center_val
           if @diff > SENSITIVITY
             @newThreshold = (@max_value + @center_val) / 2
@@ -159,17 +165,17 @@ end
 # センサーとアルゴリズムの初期化                                                                                                                                                                                                           
 i2c = I2C.new()                                                                                                                                                                                                                            
 adxl = ADXL367.new(i2c)
-pedometer = Pedometer.new()
-
 # センサーを計測モードにする（0x2D レジスタに 0x02 を書く）
-i2c.write(0x1D, [0x2D, 0x02])
+acc.on()
+pedometer = Pedometer.new()
 spiffs = Spiffs.new
 spiffs.init
 time_ms = 0
+
 # メインループ
 while true
   result = adxl.read()
-  pedometer.step_algorithm_an2554(result.x, result.y, result.z)
+  pedometer.step(result.x, result.y, result.z)
   # spiffsの中身はmain.cで定義
   spiffs.write("#{time_ms},#{pedometer.center_val},#{pedometer.step_count}")
   time_ms += 20

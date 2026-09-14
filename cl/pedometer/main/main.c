@@ -221,6 +221,11 @@ void app_app_main(void)
 {
     int *shared_buf = (int*)&ulp_shared_buffer;   
     int x, y, z;
+
+    // 先頭と末尾のサンプルを確認
+      printf("buf[0]: %d %d %d\n", shared_buf[0], shared_buf[1], shared_buf[2]);
+      printf("buf[499]: %d %d %d\n", shared_buf[497*3], shared_buf[497*3+1], shared_buf[497*3+2]);
+      
     // LPコアからのデータを読み取る
     for(int i = 0; i < 500; i++) {
         //x[0],y[0],z[0],x[1],y[1],z[1],...の順で格納されているので、3つずつ取り出す

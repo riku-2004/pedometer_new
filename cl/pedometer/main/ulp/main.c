@@ -38,6 +38,7 @@ int main (void)
     uint8_t data_rd[6]; // 6バイトのデータを格納
     //測定モード開始
     sensor_on();
+    ulp_lp_core_delay_us(2000); //短い待機の追加（計測モードに入るための猶予時間）
     while(1){
         lp_core_i2c_master_write_to_device(0, ADXL367_I2C_ADDR, &reg_addr, sizeof(reg_addr), 100000);
         lp_core_i2c_master_read_from_device(0, ADXL367_I2C_ADDR, data_rd, sizeof(data_rd), 100000);
