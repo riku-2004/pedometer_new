@@ -162,6 +162,7 @@ class I2C
   spiffs = Spiffs.new
   spiffs.init
   time_ms = 0
+  #70カウント以上にするとメモリに入り切らない
   ARRAY_SIZE = 70
   buf_x = Array.new(ARRAY_SIZE, 0)
   buf_y = Array.new(ARRAY_SIZE, 0)

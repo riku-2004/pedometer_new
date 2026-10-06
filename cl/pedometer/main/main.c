@@ -219,12 +219,17 @@ void step_algorithm_an2554(int x, int y, int z) {
     
 void app_app_main(void)
 {
+
     int *shared_buf = (int*)&ulp_shared_buffer;   
     int x, y, z;
 
-    // 先頭と末尾のサンプルを確認
-      printf("buf[0]: %d %d %d\n", shared_buf[0], shared_buf[1], shared_buf[2]);
-      printf("buf[499]: %d %d %d\n", shared_buf[497*3], shared_buf[497*3+1], shared_buf[497*3+2]);
+    // デバッグ: write_indexの値を確認
+      printf("write_index: %d\n", (int)ulp_write_index);
+
+      // デバッグ: バッファの末尾付近を確認（0でないデータがどこまであるか）
+      for (int i = 498; i < 500; i++) {
+          printf("buf[%d]: %d %d %d\n", i, shared_buf[i*3], shared_buf[i*3+1], shared_buf[i*3+2]);
+      }
       
     // LPコアからのデータを読み取る
     for(int i = 0; i < 500; i++) {
@@ -272,11 +277,12 @@ void app_main(void)
         //初回は初期化してすぐに寝る
         init_algorithm();
         lp_core_init();
-        esp_sleep_enable_timer_wakeup(10000000); // 10秒ごとに起床
+        // esp_sleep_enable_timer_wakeup(10000000); // 10秒ごとに起床
+        esp_sleep_enable_ulp_wakeup();
         esp_deep_sleep_start();
     }
     //deepsleepから復帰したとき
-    else if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_TIMER) {
+    else if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_ULP) {
         init_spiffs();
         FILE* f_write = fopen("/spiffs/walk_log.csv", "a");
         if (f_write == NULL) {
@@ -288,7 +294,9 @@ void app_main(void)
         fprintf(f_write, "%d,%d,%d\n", time_ms, center_val, step_count);
         fflush(f_write); // ここで一度確実に保存
         fclose(f_write);
-        esp_sleep_enable_timer_wakeup(10000000); // 10秒ごとに起床
+        esp_sleep_enable_ulp_wakeup();
+        ulp_lp_core_run(&cfg);
+        // esp_sleep_enable_timer_wakeup(10000000); // 10秒ごとに起床
         esp_deep_sleep_start();
     }
 }

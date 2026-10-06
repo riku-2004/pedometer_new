@@ -12,11 +12,12 @@
 #include "ulp_lp_core_gpio.h"
 #include "ulp_lp_core_interrupts.h"
 #include "ulp_lp_core_lp_timer_shared.h"
+#include "../../../misc.c"
 
 #define ADXL367_I2C_ADDR 0x1D
 const uint8_t CMD_MEASURE[] = {0x2D,2};
 const uint8_t CMD_STANDBY[] = {0x2D,0};
-int shared_buffer[1500]; // 30秒 × 50Hz
+int shared_buffer[1500]; // 500サンプル*3軸
 int write_index;     // LPコアが書き込む位置
 
 int conv(uint8_t * ary, int base) {
@@ -32,14 +33,15 @@ int sensor_on(void) {
 //   lp_core_i2c_master_write_to_device(LP_I2C_NUM_0, ADXL367_I2C_ADDR, CMD_STANDBY, sizeof(CMD_STANDBY), -1);
 // }
 
-int main (void)
+int app_main (void)
 {
+    write_index = 0;
     uint8_t reg_addr = 0x0E; // データレジスタのアドレス
     uint8_t data_rd[6]; // 6バイトのデータを格納
     //測定モード開始
     sensor_on();
-    ulp_lp_core_delay_us(2000); //短い待機の追加（計測モードに入るための猶予時間）
-    while(1){
+    delayMs(2); //短い待機の追加（計測モードに入るための猶予時間）
+    while(write_index < 500){ //500回で終わるループにする
         lp_core_i2c_master_write_to_device(0, ADXL367_I2C_ADDR, &reg_addr, sizeof(reg_addr), 100000);
         lp_core_i2c_master_read_from_device(0, ADXL367_I2C_ADDR, data_rd, sizeof(data_rd), 100000);
         int x = conv(data_rd, 0);
@@ -49,8 +51,11 @@ int main (void)
         shared_buffer[write_index * 3 + 0] = x;
         shared_buffer[write_index * 3 + 1] = y;
         shared_buffer[write_index * 3 + 2] = z;
-        write_index = (write_index + 1) % 500; // バッファのインデックスを更新
-        ulp_lp_core_delay_us(20000); // 20ms待機
+        write_index = write_index + 1;
+        // write_index = (write_index + 1) % 500; // バッファのインデックスを更新
+        delayMs(20); // 20ms待機
     }
+    return 0;
 }
+//app_mainが終わるとwakeup()を呼んでHPを起こす
 
