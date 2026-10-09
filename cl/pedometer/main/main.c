@@ -169,7 +169,7 @@ void step_algorithm_an2554(int x, int y, int z) {
         case 1: //谷探し
             if(is_min){
                 //center_val=谷の値になっている
-                uint32_t Difference = max_value - center_val;
+                int32_t Difference = max_value - center_val;
                 //山から谷の落差だけは確認する
                 if(Difference > SENSITIVITY){
                     // 新しいしきい値を計算

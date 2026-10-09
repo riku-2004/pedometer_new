@@ -166,19 +166,25 @@ end
 i2c = I2C.new()                                                                                                                                                                                                                            
 adxl = ADXL367.new(i2c)
 # センサーを計測モードにする（0x2D レジスタに 0x02 を書く）
-acc.on()
+adxl.on()
 pedometer = Pedometer.new()
 spiffs = Spiffs.new
 spiffs.init
 time_ms = 0
-
+sample_count = 0
 # メインループ
 while true
   result = adxl.read()
   pedometer.step(result.x, result.y, result.z)
-  # spiffsの中身はmain.cで定義
-  spiffs.write("#{time_ms},#{pedometer.center_val},#{pedometer.step_count}")
+  sample_count += 1
   time_ms += 20
+  if sample_count >= 500
+    spiffs.write("#{time_ms},#{pedometer.center_val},#{pedometer.step_count}")
+    sample_count = 0
+  end
+  # spiffsの中身はmain.cで定義
+  # spiffs.write("#{time_ms},#{pedometer.center_val},#{pedometer.step_count}")
+  
   Copro.delayMs(20)
 end
 

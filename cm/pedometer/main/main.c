@@ -480,7 +480,7 @@ void step_algorithm_an2554(int x, int y, int z) {
         case 1: //谷探し
             if(is_min){
                 //center_val=谷の値になっている
-                uint32_t Difference = max_value - center_val;
+                int32_t Difference = max_value - center_val;
 
                 // 動的しきい値の更新（差が大きい場合のみ）
                 if (Difference > SENSITIVITY) {
@@ -590,7 +590,7 @@ void app_main(void)
     // CSVのヘッダーを書き込む
     fprintf(f_write, "Time_ms,Filtered_Mag,Step_Count\n");
     fflush(f_write); // ここで一度確実に保存
-
+    int sample_count = 0;
     static int time_ms = 0;
     esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
     lp_i2c_init();
@@ -601,7 +601,7 @@ void app_main(void)
     esp_err_t rett = hp_lp_core_i2c_master_write_read_device(LP_I2C_NUM_0, ADXL367_I2C_ADDR, &reg, 1, &devid, 1, 100000);
     // printf("DEVID test: ret=0x%x, id=0x%x\n", rett, devid);
     sensor_on();
-
+    
     printf("Pedometer algorithm started...\n");
     // printf("before loop\n");
     while(1) {
@@ -613,11 +613,15 @@ void app_main(void)
         i2c_ll_master_fsm_rst(dev);
         i2c_ll_txfifo_rst(dev);
         i2c_ll_rxfifo_rst(dev);
-        fprintf(f_write, "%d,%d,%d\n", time_ms, center_val, step_count);
-        if (time_ms % 1000 == 0) {
+        // fprintf(f_write, "%d,%d,%d\n", time_ms, center_val, step_count);
+        sample_count++;
+        time_ms += 20;
+        if (sample_count >= 500){// 500サンプルごとにフラッシュ
+            fprintf(f_write, "%d,%d,%d\n", time_ms, center_val, step_count);
             fflush(f_write); 
+            sample_count = 0;
         }
 
-        time_ms += 20;
+        
     }
 }
