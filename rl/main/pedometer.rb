@@ -176,10 +176,12 @@ class I2C
       count = 0
       while count < ARRAY_SIZE
         result = acc.read()
-        buf_x[count] = result.x
-        buf_y[count] = result.y
-        buf_z[count] = result.z
-        count += 1
+        if result
+          buf_x[count] = result.x
+          buf_y[count] = result.y
+          buf_z[count] = result.z
+          count += 1
+        end
         Copro.delayMs(20)
       end
     end

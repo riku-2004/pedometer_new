@@ -545,18 +545,19 @@ int sensor_on(void) {
 }
 
 
-void app_app_main(void)
+int app_app_main(void)
 {
     int x, y, z;
     // printf("before sensor_read\n");
     if (sensor_read(&x, &y, &z) != 0) {
         ESP_LOGW(TAG, "Failed to read sensor data");
-        return;
+        return 1;
     }
     // printf("before algorithm\n");
     //生の加速度をアルゴリズムへ渡す
     step_algorithm_an2554(x, y, z);
     printf(">Step:%d\n", step_count);
+    return 0;
 }
 
 void app_main(void) 
@@ -606,7 +607,7 @@ void app_main(void)
     // printf("before loop\n");
     while(1) {
         // printf("start loop\n");
-        app_app_main();
+        int ok = (app_app_main() == 0);
         // printf("finish app_app_main\n");
         // vTaskDelay(20 / portTICK_PERIOD_MS);
         delayMs(20);
@@ -614,14 +615,14 @@ void app_main(void)
         i2c_ll_txfifo_rst(dev);
         i2c_ll_rxfifo_rst(dev);
         // fprintf(f_write, "%d,%d,%d\n", time_ms, center_val, step_count);
-        sample_count++;
-        time_ms += 20;
-        if (sample_count >= 500){// 500サンプルごとにフラッシュ
-            fprintf(f_write, "%d,%d,%d\n", time_ms, center_val, step_count);
-            fflush(f_write); 
-            sample_count = 0;
+        if(ok){
+            sample_count++;
+            time_ms += 20;
+            if (sample_count >= 500){// 500サンプルごとにフラッシュ
+                fprintf(f_write, "%d,%d,%d\n", time_ms, center_val, step_count);
+                fflush(f_write); 
+                sample_count = 0;
+            }
         }
-
-        
     }
 }

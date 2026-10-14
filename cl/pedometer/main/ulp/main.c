@@ -42,16 +42,19 @@ int app_main (void)
     sensor_on();
     delayMs(2); //短い待機の追加（計測モードに入るための猶予時間）
     while(write_index < 500){ //500回で終わるループにする
-        lp_core_i2c_master_write_to_device(0, ADXL367_I2C_ADDR, &reg_addr, sizeof(reg_addr), 100000);
-        lp_core_i2c_master_read_from_device(0, ADXL367_I2C_ADDR, data_rd, sizeof(data_rd), 100000);
-        int x = conv(data_rd, 0);
-        int y = conv(data_rd, 2);
-        int z = conv(data_rd, 4);
-        //二乗和の計算はHP側で行う
-        shared_buffer[write_index * 3 + 0] = x;
-        shared_buffer[write_index * 3 + 1] = y;
-        shared_buffer[write_index * 3 + 2] = z;
-        write_index = write_index + 1;
+        esp_err_t ret = lp_core_i2c_master_write_to_device(0, ADXL367_I2C_ADDR, &reg_addr, sizeof(reg_addr), 100000);
+        esp_err_t ret2 = lp_core_i2c_master_read_from_device(0, ADXL367_I2C_ADDR, data_rd, sizeof(data_rd), 100000);
+        if (ret == ESP_OK && ret2 == ESP_OK) {
+          // データの読み取りに成功した場合の処理
+          int x = conv(data_rd, 0);
+          int y = conv(data_rd, 2);
+          int z = conv(data_rd, 4);
+          //二乗和の計算はHP側で行う
+          shared_buffer[write_index * 3 + 0] = x;
+          shared_buffer[write_index * 3 + 1] = y;
+          shared_buffer[write_index * 3 + 2] = z;
+          write_index = write_index + 1; // ここでwrite_indexを更新
+        } 
         // write_index = (write_index + 1) % 500; // バッファのインデックスを更新
         delayMs(20); // 20ms待機
     }
